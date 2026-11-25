@@ -283,7 +283,7 @@ textarea.fld{height:auto;width:100%;padding:8px 10px;font-family:ui-monospace,Co
 <section class="hero">
   <div class="intro">
     <h1>Every Ignite 2026 session, summarized</h1>
-    <p>Short summaries, key takeaways, architecture views where the session describes one, the on-demand recording. Browse by topic or type, search for anything, and build your own playlists to watch sessions back to back.</p>
+    <p>Short summaries, key takeaways, architecture views where the session describes one, and the on-demand recording. Browse by topic or type, search for anything, and build your own playlists to watch sessions back to back.</p>
   </div>
   <div class="kpi"><b>739</b><span>sessions</span></div>
   <div class="kpi"><b>737</b><span>with recording linked</span></div>
@@ -583,32 +583,52 @@ function openD(i, opts){
   $("dbody").scrollTop=0; syncHash(r.c);
   if(opts && opts.autoplay && r.v && !MEDIA_BLOCKED) startVideo(r);
 }
-function stopVideo(){ clearUp(); const v=document.querySelector("#vbox video"); if(v){ try{v.pause(); v.removeAttribute("src"); v.load();}catch(e){} } }
+// One <video> element is reused for every recording. Browsers with stricter autoplay settings only let a
+// player start after it has been clicked once; reusing it lets a playlist move on to the next recording by itself.
+let PLAYER = null, playing = null, vStarted = false, vSlow = 0;
+function player(){
+  if(PLAYER) return PLAYER;
+  const v = document.createElement("video");
+  v.controls = true; v.playsInline = true; v.preload = "auto";
+  v.setAttribute("controlsList", "nodownload");
+  v.addEventListener("loadedmetadata", () => { vStarted = true; const c = $("vctl"); if(c) c.hidden = false;
+    const m = Math.round(v.duration / 60), s = $("vstat"); if(s && isFinite(m) && m > 0) s.textContent = `${m} min`; });
+  v.addEventListener("loadeddata", () => { clearTimeout(vSlow); const s = $("vstat"); if(s && s.textContent.startsWith("Still")) s.textContent = ""; });
+  v.addEventListener("error", () => { if(playing && v.getAttribute("src")) videoFailed(playing); });
+  v.addEventListener("ended", upNext);
+  return PLAYER = v;
+}
+function stopVideo(){ clearUp(); clearTimeout(vSlow); playing = null; const v = PLAYER; if(v){ try { v.pause(); v.removeAttribute("src"); v.load(); } catch(e) {} } }
+function videoFailed(r){
+  const b = $("vbox"), v = PLAYER; if(vStarted || !b || !v || !v.isConnected) return;
+  const e = v.error, c = $("vctl"); if(c) c.hidden = true; b.classList.add("blocked");
+  if((lastCSP && /^media-src/.test(lastCSP.d)) || (e && /URL safety check/i.test(e.message||""))){ markMediaBlocked(); b.innerHTML = blockedHTML(r); return; }
+  const names = {1:"MEDIA_ERR_ABORTED",2:"MEDIA_ERR_NETWORK",3:"MEDIA_ERR_DECODE",4:"MEDIA_ERR_SRC_NOT_SUPPORTED"};
+  const detail = e ? (names[e.code]||("code "+e.code)) + (e.message ? " | " + e.message : "") : "";
+  b.innerHTML = `<div class="vfail"><b>The recording couldn't load.</b><span>Check your connection and press Play again, or watch it in a new tab.</span><a class="play" href="${esc(MP4(r.v))}" target="_blank" rel="noopener">▶ Open video in new tab</a>${detail?`<small class="vdet">${esc(detail)}</small>`:""}</div>`;
+}
+// If the browser still refuses to start a recording on its own, show one clear Play button over it.
+function tapToPlay(r){
+  const b = $("vbox"); if(!b || (b.querySelector && b.querySelector(".upnext"))) return;
+  const o = document.createElement("div"); o.className = "upnext";
+  o.innerHTML = `<small>${st.pl ? "Next in your playlist" : "Ready to play"}</small><b class="utitle"></b><div class="ubtn"><button class="play" data-u="go">▶ Play</button></div>`;
+  const tEl = o.querySelector && o.querySelector(".utitle"); if(tEl) tEl.textContent = `${r.c} · ${r.t}`;
+  o.onclick = e => { const btn = e.target.closest && e.target.closest("[data-u]"); if(!btn) return; o.remove(); const pp = PLAYER && PLAYER.play(); if(pp && pp.catch) pp.catch(() => {}); };
+  b.appendChild(o);
+}
 function startVideo(r){
-  const b=$("vbox"); b.innerHTML="";
-  const v=document.createElement("video");
-  v.controls=true; v.autoplay=true; v.playsInline=true; v.preload="auto";
-  v.setAttribute("controlsList","nodownload"); v.title=r.t;
-  let started=false;
-  const fail=()=>{ if(started||!v.isConnected) return;
-    const e=v.error;
-    $("vctl").hidden=true; b.classList.add("blocked");
-    if((lastCSP && /^media-src/.test(lastCSP.d)) || (e && /URL safety check/i.test(e.message||""))){
-      markMediaBlocked(); b.innerHTML=blockedHTML(r); return; }
-    const names={1:"MEDIA_ERR_ABORTED",2:"MEDIA_ERR_NETWORK",3:"MEDIA_ERR_DECODE",4:"MEDIA_ERR_SRC_NOT_SUPPORTED"};
-    const detail=e?(names[e.code]||("code "+e.code))+(e.message?" | "+e.message:""):"";
-    b.innerHTML=`<div class="vfail"><b>The recording couldn't load.</b><span>Check your connection and press Play again, or watch it in a new tab.</span><a class="play" href="${esc(MP4(r.v))}" target="_blank" rel="noopener">▶ Open video in new tab</a>${detail?`<small class="vdet">${esc(detail)}</small>`:""}</div>`; };
-  v.addEventListener("loadedmetadata",()=>{ started=true; $("vctl").hidden=false;
-    const m=Math.round(v.duration/60); if(isFinite(m)&&m>0) $("vstat").textContent=`${m} min`; });
-  v.addEventListener("error",fail);
-  v.addEventListener("ended",upNext);
-  const slow=setTimeout(()=>{ if(started||!v.isConnected) return; $("vstat").innerHTML=`Still loading… <a href="${esc(MP4(r.v))}" target="_blank" rel="noopener">open in new tab</a>`; $("vctl").hidden=false; },10000);
-  v.addEventListener("loadeddata",()=>{clearTimeout(slow); if($("vstat")&&$("vstat").textContent.startsWith("Still")) $("vstat").textContent="";});
-  v.src=MP4(r.v);
+  const b = $("vbox"); if(!b) return;
+  const v = player(); playing = r; vStarted = false; clearTimeout(vSlow);
+  b.innerHTML = ""; b.classList.remove("blocked");
+  v.title = r.t; v.src = MP4(r.v); v.playbackRate = v.defaultPlaybackRate || 1;
   b.appendChild(v);
-  const p=v.play(); if(p&&p.catch) p.catch(()=>{});
-  $("vctl").querySelectorAll("button").forEach(btn=>btn.onclick=()=>{ v.playbackRate=+btn.dataset.s;
-    $("vctl").querySelectorAll("button").forEach(x=>x.classList.toggle("on",x===btn)); });
+  vSlow = setTimeout(() => { if(vStarted || !v.isConnected) return; const s = $("vstat"); if(s) s.innerHTML = `Still loading… <a href="${esc(MP4(r.v))}" target="_blank" rel="noopener">open in new tab</a>`; const c = $("vctl"); if(c) c.hidden = false; }, 10000);
+  const p = v.play();
+  if(p && p.catch) p.catch(err => { if(err && err.name === "NotAllowedError" && playing === r && v.isConnected) tapToPlay(r); });
+  const c = $("vctl"); if(!c) return;
+  const mark = () => c.querySelectorAll("button").forEach(x => x.classList.toggle("on", +x.dataset.s === (v.defaultPlaybackRate || 1)));
+  c.querySelectorAll("button").forEach(btn => btn.onclick = () => { v.defaultPlaybackRate = v.playbackRate = +btn.dataset.s; mark(); });
+  mark();
 }
 function closeD(){ stopVideo(); closePop(); dcode=null; $("drawer").classList.remove("on"); $("scrim").classList.remove("on"); $("dbody").innerHTML=""; syncHash(""); }
 function closeMenu(){ $("side").classList.remove("on"); if(!$("drawer").classList.contains("on")) $("scrim").classList.remove("on"); }
